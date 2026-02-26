@@ -14,7 +14,9 @@ import {
   Pencil,
   CheckSquare,
   Square,
-  Layers
+  Layers,
+  Search,
+  ChevronLeft
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
@@ -26,7 +28,11 @@ import {
   Tooltip, 
   ResponsiveContainer,
   AreaChart,
-  Area
+  Area,
+  BarChart,
+  Bar,
+  ComposedChart,
+  LabelList
 } from 'recharts';
 import { format } from 'date-fns';
 import { clsx, type ClassValue } from 'clsx';
@@ -67,6 +73,11 @@ export default function App() {
   const [editingSell, setEditingSell] = useState<{ sell: Sell, tradeId: number } | null>(null);
   const [loading, setLoading] = useState(true);
   const [isChartVisible, setIsChartVisible] = useState(true);
+  const [chartType, setChartType] = useState<'trend' | 'monthly'>('monthly');
+  const [filterQuantity, setFilterQuantity] = useState('');
+  const [filterDate, setFilterDate] = useState('');
+  const [currentPage, setCurrentPage] = useState(1);
+  const itemsPerPage = 10;
   
   const [confirmConfig, setConfirmConfig] = useState<{
     isOpen: boolean;
@@ -126,6 +137,10 @@ export default function App() {
       localStorage.setItem('gold_trades_v2', JSON.stringify(trades));
     }
   }, [trades, loading]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [filterQuantity, filterDate]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -353,28 +368,70 @@ export default function App() {
       batch.buyPrice = totalBuyCost / batch.totalQuantity;
     });
 
-    const items = [
-      ...standaloneTrades.map(t => ({ 
-        type: 'trade' as const, 
-        id: `trade-${t.id}`,
-        data: t, 
-        timestamp: new Date(t.buy_date).getTime(),
-        isFullySold: (t.quantity - t.sells.reduce((acc, s) => acc + s.quantity, 0)) < 0.0001
-      })),
+    let items = [
+      ...standaloneTrades.map(t => {
+        const latestSellDate = t.sells.length > 0 
+          ? Math.max(...t.sells.map(s => new Date(s.sell_date).getTime()))
+          : new Date(t.buy_date).getTime();
+          
+        return { 
+          type: 'trade' as const, 
+          id: `trade-${t.id}`,
+          data: t, 
+          timestamp: latestSellDate,
+          buyTimestamp: new Date(t.buy_date).getTime(),
+          isFullySold: (t.quantity - t.sells.reduce((acc, s) => acc + s.quantity, 0)) < 0.0001
+        };
+      }),
       ...Object.values(batches).map(b => ({ 
         type: 'batch' as const, 
         id: `batch-${b.id}`,
         data: b, 
         timestamp: new Date(b.batchDate).getTime(),
+        buyTimestamp: Math.min(...b.trades.map(t => new Date(t.buy_date).getTime())),
         isFullySold: true
       }))
     ];
 
+    // Apply Filters
+    if (filterQuantity) {
+      const q = parseFloat(filterQuantity);
+      if (!isNaN(q)) {
+        items = items.filter(item => {
+          if (item.type === 'trade') {
+            return Math.abs(item.data.quantity - q) < 0.001;
+          } else {
+            return Math.abs(item.data.totalQuantity - q) < 0.001;
+          }
+        });
+      }
+    }
+
+    if (filterDate) {
+      items = items.filter(item => {
+        if (item.type === 'trade') {
+          return item.data.buy_date.startsWith(filterDate);
+        } else {
+          return item.data.trades.some(t => t.buy_date.startsWith(filterDate));
+        }
+      });
+    }
+
+    // Sort: Unsold first, then by timestamp desc
     return items.sort((a, b) => {
-      if (a.isFullySold !== b.isFullySold) return a.isFullySold ? 1 : -1;
+      if (a.isFullySold !== b.isFullySold) {
+        return a.isFullySold ? 1 : -1;
+      }
       return b.timestamp - a.timestamp;
     });
-  }, [trades]);
+  }, [trades, filterQuantity, filterDate]);
+
+  const paginatedItems = useMemo(() => {
+    const start = (currentPage - 1) * itemsPerPage;
+    return displayItems.slice(start, start + itemsPerPage);
+  }, [displayItems, currentPage]);
+
+  const totalPages = Math.ceil(displayItems.length / itemsPerPage);
 
   const handleDeleteBatch = (batchId: string) => {
     setTrades(prev => prev.filter(t => !t.sells.some(s => s.batch_id === batchId)));
@@ -391,8 +448,35 @@ export default function App() {
       .sort((a, b) => a.timestamp - b.timestamp)
       .map(s => ({
         '日期': s.date,
-        '收益': parseFloat(s.profit.toFixed(2))
+        '收益': parseFloat(s.profit.toFixed(4))
       }));
+  }, [trades]);
+
+  const monthlyChartData = useMemo(() => {
+    const monthlyData: Record<string, number> = {};
+    
+    trades.forEach(t => {
+      t.sells.forEach(s => {
+        const month = format(new Date(s.sell_date), 'yyyy-MM');
+        const profit = (s.sell_price - t.buy_price) * s.quantity - s.fee;
+        monthlyData[month] = (monthlyData[month] || 0) + profit;
+      });
+    });
+
+    const data = Object.entries(monthlyData)
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([month, profit]) => ({
+        month,
+        '月收益': parseFloat(profit.toFixed(4))
+      }));
+
+    const totalProfit = data.reduce((acc, curr) => acc + curr['月收益'], 0);
+    const averageProfit = data.length > 0 ? totalProfit / data.length : 0;
+
+    return {
+      data,
+      averageProfit
+    };
   }, [trades]);
 
   const selectedTotalWeight = useMemo(() => {
@@ -420,7 +504,7 @@ export default function App() {
               <button 
                 onClick={() => {
                   setIsBatchSelling(true);
-                  setSellFormData(prev => ({ ...prev, quantity: selectedTotalWeight.toFixed(3) }));
+                  setSellFormData(prev => ({ ...prev, quantity: selectedTotalWeight.toFixed(4) }));
                 }}
                 className="flex items-center gap-2 bg-yellow-500 text-black px-4 py-2 rounded-full text-sm font-bold hover:bg-yellow-400 transition-all active:scale-95 shadow-lg shadow-yellow-500/20"
               >
@@ -459,7 +543,7 @@ export default function App() {
           />
           <StatCard 
             label="当前持仓" 
-            value={`${stats.activeWeight.toFixed(3)}g`}
+            value={`${stats.activeWeight.toFixed(4)}g`}
             icon={<Scale className="w-5 h-5 text-yellow-500" />}
           />
         </section>
@@ -467,59 +551,130 @@ export default function App() {
         {/* Chart Section */}
         {chartData.length > 0 && (
           <section className="bg-[#141414] rounded-2xl border border-[#262626] shadow-sm overflow-hidden">
-            <button 
-              onClick={() => setIsChartVisible(!isChartVisible)}
-              className="w-full p-6 flex items-center justify-between hover:bg-[#1A1A1A] transition-colors"
-            >
-              <h2 className="text-sm font-bold uppercase tracking-wider text-gray-400 flex items-center gap-2">
-                <LayoutDashboard size={16} />
-                收益走势 (单笔卖出)
-              </h2>
-              <ChevronRight size={20} className={cn("text-gray-500 transition-transform", isChartVisible && "rotate-90")} />
-            </button>
+            <div className="p-6 flex items-center justify-between border-b border-[#262626]">
+              <div className="flex items-center gap-6">
+                <button 
+                  onClick={() => setIsChartVisible(!isChartVisible)}
+                  className="flex items-center gap-2 hover:text-white transition-colors"
+                >
+                  <h2 className="text-sm font-bold uppercase tracking-wider text-gray-400 flex items-center gap-2">
+                    <LayoutDashboard size={16} />
+                    {chartType === 'monthly' ? '月度收益统计' : '收益走势 (单笔卖出)'}
+                  </h2>
+                  <ChevronRight size={16} className={cn("text-gray-500 transition-transform", isChartVisible && "rotate-90")} />
+                </button>
+
+                {isChartVisible && chartType === 'monthly' && monthlyChartData.data.length > 0 && (
+                  <div className="flex items-center gap-2 px-2 py-1 bg-[#0A0A0A] rounded-lg border border-[#262626]">
+                    <span className="hidden xs:inline text-[10px] text-gray-500 uppercase font-bold tracking-wider">月均:</span>
+                    <span className="text-xs font-mono font-bold text-rose-500">
+                      ¥{monthlyChartData.averageProfit.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                    </span>
+                  </div>
+                )}
+              </div>
+              
+              <div className="flex bg-[#0A0A0A] p-1 rounded-lg border border-[#262626] shrink-0">
+                <button 
+                  onClick={() => setChartType('monthly')}
+                  className={cn(
+                    "px-3 py-1 text-[10px] font-bold uppercase tracking-wider rounded-md transition-all",
+                    chartType === 'monthly' ? "bg-yellow-500 text-black" : "text-gray-500 hover:text-gray-300"
+                  )}
+                >
+                  月度图
+                </button>
+                <button 
+                  onClick={() => setChartType('trend')}
+                  className={cn(
+                    "px-3 py-1 text-[10px] font-bold uppercase tracking-wider rounded-md transition-all",
+                    chartType === 'trend' ? "bg-yellow-500 text-black" : "text-gray-500 hover:text-gray-300"
+                  )}
+                >
+                  走势图
+                </button>
+              </div>
+            </div>
+            
             <AnimatePresence>
               {isChartVisible && (
                 <motion.div 
                   initial={{ height: 0, opacity: 0 }}
                   animate={{ height: 'auto', opacity: 1 }}
                   exit={{ height: 0, opacity: 0 }}
-                  className="px-6 pb-6"
+                  className="px-6 pb-6 pt-6"
                 >
-                  <div className="h-[300px] w-full">
+                  <div className="h-[300px] w-full relative">
                     <ResponsiveContainer width="100%" height="100%">
-                      <AreaChart data={chartData}>
-                        <defs>
-                          <linearGradient id="colorProfit" x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="5%" stopColor="#F43F5E" stopOpacity={0.2}/>
-                            <stop offset="95%" stopColor="#F43F5E" stopOpacity={0}/>
-                          </linearGradient>
-                        </defs>
-                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#262626" />
-                        <XAxis 
-                          dataKey="日期" 
-                          axisLine={false} 
-                          tickLine={false} 
-                          tick={{ fontSize: 10, fill: '#525252' }}
-                        />
-                        <YAxis 
-                          axisLine={false} 
-                          tickLine={false} 
-                          tick={{ fontSize: 12, fill: '#525252' }}
-                        />
-                        <Tooltip 
-                          contentStyle={{ backgroundColor: '#1A1A1A', borderRadius: '12px', border: '1px solid #333', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.5)' }}
-                          itemStyle={{ color: '#F43F5E' }}
-                          labelStyle={{ fontWeight: 'bold', marginBottom: '4px', color: '#FFF' }}
-                        />
-                        <Area 
-                          type="monotone" 
-                          dataKey="收益" 
-                          stroke="#F43F5E" 
-                          strokeWidth={2}
-                          fillOpacity={1} 
-                          fill="url(#colorProfit)" 
-                        />
-                      </AreaChart>
+                      {chartType === 'trend' ? (
+                        <AreaChart data={chartData}>
+                          <defs>
+                            <linearGradient id="colorProfit" x1="0" y1="0" x2="0" y2="1">
+                              <stop offset="5%" stopColor="#F43F5E" stopOpacity={0.2}/>
+                              <stop offset="95%" stopColor="#F43F5E" stopOpacity={0}/>
+                            </linearGradient>
+                          </defs>
+                          <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#262626" />
+                          <XAxis 
+                            dataKey="日期" 
+                            axisLine={false} 
+                            tickLine={false} 
+                            tick={{ fontSize: 10, fill: '#525252' }}
+                          />
+                          <YAxis 
+                            axisLine={false} 
+                            tickLine={false} 
+                            tick={{ fontSize: 12, fill: '#525252' }}
+                          />
+                          <Tooltip 
+                            contentStyle={{ backgroundColor: '#1A1A1A', borderRadius: '12px', border: '1px solid #333', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.5)' }}
+                            itemStyle={{ color: '#F43F5E' }}
+                            labelStyle={{ fontWeight: 'bold', marginBottom: '4px', color: '#FFF' }}
+                          />
+                          <Area 
+                            type="monotone" 
+                            dataKey="收益" 
+                            stroke="#F43F5E" 
+                            strokeWidth={2}
+                            fillOpacity={1} 
+                            fill="url(#colorProfit)" 
+                          />
+                        </AreaChart>
+                      ) : (
+                        <BarChart data={monthlyChartData.data} margin={{ top: 20, right: 10, left: 10, bottom: 0 }}>
+                          <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#262626" />
+                          <XAxis 
+                            dataKey="month" 
+                            axisLine={false} 
+                            tickLine={false} 
+                            tick={{ fontSize: 10, fill: '#525252' }}
+                          />
+                          <YAxis 
+                            axisLine={false} 
+                            tickLine={false} 
+                            tick={{ fontSize: 12, fill: '#525252' }}
+                          />
+                          <Tooltip 
+                            contentStyle={{ backgroundColor: '#1A1A1A', borderRadius: '12px', border: '1px solid #333', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.5)' }}
+                            itemStyle={{ color: '#F43F5E' }}
+                            labelStyle={{ fontWeight: 'bold', marginBottom: '4px', color: '#FFF' }}
+                          />
+                          <Bar 
+                            dataKey="月收益" 
+                            fill="#F43F5E" 
+                            radius={[4, 4, 0, 0]}
+                            barSize={40}
+                          >
+                            <LabelList 
+                              dataKey="月收益" 
+                              position="top" 
+                              fill="#F43F5E" 
+                              fontSize={10} 
+                              formatter={(value: number) => `¥${value.toFixed(0)}`}
+                            />
+                          </Bar>
+                        </BarChart>
+                      )}
                     </ResponsiveContainer>
                   </div>
                 </motion.div>
@@ -529,27 +684,49 @@ export default function App() {
         )}
 
         {/* Transactions List */}
-        <section className="space-y-4">
-          <div className="flex items-center justify-between">
+        <section className="space-y-6">
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
             <h2 className="text-lg font-bold">交易明细</h2>
-            <div className="flex items-center gap-4">
-              {selectedTradeIds.length > 0 && (
+            
+            <div className="flex flex-wrap items-center gap-3">
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" size={14} />
+                <input 
+                  type="number" 
+                  step="0.0001"
+                  placeholder="按克数查询..."
+                  value={filterQuantity}
+                  onChange={(e) => setFilterQuantity(e.target.value)}
+                  className="bg-[#141414] border border-[#262626] rounded-full pl-9 pr-4 py-1.5 text-xs text-white focus:ring-1 focus:ring-yellow-500 outline-none w-32"
+                />
+              </div>
+              <div className="relative">
+                <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" size={14} />
+                <input 
+                  type="date" 
+                  value={filterDate}
+                  onChange={(e) => setFilterDate(e.target.value)}
+                  className="bg-[#141414] border border-[#262626] rounded-full pl-9 pr-4 py-1.5 text-xs text-white focus:ring-1 focus:ring-yellow-500 outline-none w-36"
+                />
+              </div>
+              {(filterQuantity || filterDate) && (
                 <button 
-                  onClick={() => setSelectedTradeIds([])}
-                  className="text-xs text-rose-500 font-bold uppercase hover:underline"
+                  onClick={() => { setFilterQuantity(''); setFilterDate(''); }}
+                  className="text-[10px] font-bold text-rose-500 uppercase hover:underline"
                 >
-                  取消选择 ({selectedTradeIds.length})
+                  清除筛选
                 </button>
               )}
+              <div className="h-4 w-px bg-[#262626] mx-1" />
               <span className="text-xs text-gray-400 font-mono uppercase tracking-widest">
-                {trades.length} BUY ORDERS
+                {displayItems.length} ITEMS
               </span>
             </div>
           </div>
 
           <div className="grid gap-6">
-            <AnimatePresence>
-              {displayItems.map((item) => (
+            <AnimatePresence mode="popLayout">
+              {paginatedItems.map((item) => (
                 item.type === 'trade' ? (
                   <TradeItem 
                     key={item.id} 
@@ -579,17 +756,57 @@ export default function App() {
               ))}
             </AnimatePresence>
             
-            {!loading && trades.length === 0 && (
+            {/* Pagination */}
+            {totalPages > 1 && (
+              <div className="flex items-center justify-center gap-2 pt-4">
+                <button 
+                  disabled={currentPage === 1}
+                  onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
+                  className="p-2 rounded-lg bg-[#141414] border border-[#262626] text-gray-400 disabled:opacity-30 disabled:cursor-not-allowed hover:text-white transition-colors"
+                >
+                  <ChevronLeft size={16} />
+                </button>
+                
+                <div className="flex items-center gap-1">
+                  {Array.from({ length: totalPages }, (_, i) => i + 1).map(page => (
+                    <button
+                      key={page}
+                      onClick={() => setCurrentPage(page)}
+                      className={cn(
+                        "w-8 h-8 rounded-lg text-xs font-bold transition-all",
+                        currentPage === page 
+                          ? "bg-yellow-500 text-black" 
+                          : "bg-[#141414] border border-[#262626] text-gray-500 hover:text-white"
+                      )}
+                    >
+                      {page}
+                    </button>
+                  ))}
+                </div>
+
+                <button 
+                  disabled={currentPage === totalPages}
+                  onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
+                  className="p-2 rounded-lg bg-[#141414] border border-[#262626] text-gray-400 disabled:opacity-30 disabled:cursor-not-allowed hover:text-white transition-colors"
+                >
+                  <ChevronRight size={16} />
+                </button>
+              </div>
+            )}
+            
+            {!loading && displayItems.length === 0 && (
               <div className="text-center py-20 bg-[#141414] rounded-2xl border border-dashed border-[#262626]">
                 <div className="flex flex-col items-center gap-3 text-gray-500">
                   <AlertCircle size={40} strokeWidth={1.5} />
-                  <p className="font-bold">暂无买入记录</p>
-                  <button 
-                    onClick={() => setIsAdding(true)}
-                    className="text-yellow-500 text-sm font-bold hover:text-yellow-400 transition-colors"
-                  >
-                    立即添加第一笔买入
-                  </button>
+                  <p className="font-bold">暂无符合条件的交易记录</p>
+                  {(filterQuantity || filterDate) && (
+                    <button 
+                      onClick={() => { setFilterQuantity(''); setFilterDate(''); }}
+                      className="text-yellow-500 text-sm font-bold hover:text-yellow-400 transition-colors"
+                    >
+                      清除筛选条件
+                    </button>
+                  )}
                 </div>
               </div>
             )}
@@ -627,11 +844,11 @@ export default function App() {
                     <input 
                       required
                       type="number" 
-                      step="0.001"
+                      step="0.0001"
                       value={formData.quantity}
                       onChange={e => setFormData({...formData, quantity: e.target.value})}
                       className="w-full bg-[#1A1A1A] border border-[#262626] text-white rounded-xl px-4 py-3 focus:ring-2 focus:ring-yellow-500 outline-none transition-all"
-                      placeholder="0.000"
+                      placeholder="0.0000"
                     />
                   </div>
                   <div className="space-y-1.5">
@@ -639,11 +856,11 @@ export default function App() {
                     <input 
                       required
                       type="number" 
-                      step="0.01"
+                      step="0.001"
                       value={formData.buy_price}
                       onChange={e => setFormData({...formData, buy_price: e.target.value})}
                       className="w-full bg-[#1A1A1A] border border-[#262626] text-white rounded-xl px-4 py-3 focus:ring-2 focus:ring-yellow-500 outline-none transition-all"
-                      placeholder="0.00"
+                      placeholder="0.000"
                     />
                   </div>
                 </div>
@@ -721,7 +938,7 @@ export default function App() {
                     <input 
                       required
                       type="number" 
-                      step="0.001"
+                      step="0.0001"
                       disabled={isBatchSelling}
                       value={sellFormData.quantity}
                       onChange={e => setSellFormData({...sellFormData, quantity: e.target.value})}
@@ -729,7 +946,7 @@ export default function App() {
                         "w-full border border-[#262626] text-white rounded-xl px-4 py-3 focus:ring-2 focus:ring-yellow-500 outline-none transition-all",
                         isBatchSelling ? "bg-[#0D0D0D] text-gray-600 cursor-not-allowed" : "bg-[#1A1A1A]"
                       )}
-                      placeholder="0.000"
+                      placeholder="0.0000"
                     />
                   </div>
                   <div className="space-y-1.5">
@@ -737,11 +954,11 @@ export default function App() {
                     <input 
                       required
                       type="number" 
-                      step="0.01"
+                      step="0.0001"
                       value={sellFormData.sell_price}
                       onChange={e => setSellFormData({...sellFormData, sell_price: e.target.value})}
                       className="w-full bg-[#1A1A1A] border border-[#262626] text-white rounded-xl px-4 py-3 focus:ring-2 focus:ring-yellow-500 outline-none transition-all"
-                      placeholder="0.00"
+                      placeholder="0.0000"
                     />
                   </div>
                 </div>
@@ -878,16 +1095,16 @@ const BatchItem = ({ batch, onDelete, askConfirmation }: { batch: any, onDelete:
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <span className="font-bold text-lg text-white">合并卖出 {batch.totalQuantity.toFixed(3)}g</span>
+                <span className="font-bold text-lg text-white">合并卖出 {batch.totalQuantity.toFixed(4)}g</span>
                 <span className="text-[10px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider bg-rose-500/20 text-rose-500">
                   已结清
                 </span>
               </div>
               <div className="flex flex-wrap items-center gap-3 text-xs text-gray-500 mt-0.5">
                 <div className="flex items-center gap-2">
-                  <span className="font-bold px-2 py-0.5 rounded text-yellow-500 bg-yellow-500/10">均价: ¥{batch.buyPrice.toFixed(2)}</span>
+                  <span className="font-bold px-2 py-0.5 rounded text-yellow-500 bg-yellow-500/10">均价: ¥{batch.buyPrice.toFixed(4)}</span>
                   <span className="text-gray-700">|</span>
-                  <span className="font-bold px-2 py-0.5 rounded text-blue-400 bg-blue-400/10">总成本: ¥{(batch.buyPrice * batch.totalQuantity).toFixed(2)}</span>
+                  <span className="font-bold px-2 py-0.5 rounded text-blue-400 bg-blue-400/10">总成本: ¥{(batch.buyPrice * batch.totalQuantity).toFixed(4)}</span>
                 </div>
                 <span className="text-gray-600">包含 {batch.trades.length} 笔买入记录</span>
               </div>
@@ -901,7 +1118,7 @@ const BatchItem = ({ batch, onDelete, askConfirmation }: { batch: any, onDelete:
                 "font-bold text-lg",
                 batch.totalProfit >= 0 ? "text-rose-500" : "text-emerald-500"
               )}>
-                {batch.totalProfit >= 0 ? '+' : ''}{batch.totalProfit.toFixed(2)}
+                {batch.totalProfit >= 0 ? '+' : ''}{batch.totalProfit.toFixed(4)}
               </span>
             </div>
           </div>
@@ -933,7 +1150,7 @@ const BatchItem = ({ batch, onDelete, askConfirmation }: { batch: any, onDelete:
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4 p-4 bg-[#141414] rounded-2xl border border-[#262626]">
                   <div className="space-y-1">
                     <div className="text-[10px] text-gray-500 uppercase font-bold">卖出单价</div>
-                    <div className="text-sm font-bold text-white">¥{batch.sellPrice.toFixed(2)}</div>
+                    <div className="text-sm font-bold text-white">¥{batch.sellPrice.toFixed(4)}</div>
                   </div>
                   <div className="space-y-1">
                     <div className="text-[10px] text-gray-500 uppercase font-bold">卖出时间</div>
@@ -941,11 +1158,11 @@ const BatchItem = ({ batch, onDelete, askConfirmation }: { batch: any, onDelete:
                   </div>
                   <div className="space-y-1">
                     <div className="text-[10px] text-gray-500 uppercase font-bold">总手续费</div>
-                    <div className="text-sm font-bold text-gray-400">¥{batch.totalFee.toFixed(2)}</div>
+                    <div className="text-sm font-bold text-gray-400">¥{batch.totalFee.toFixed(4)}</div>
                   </div>
                   <div className="space-y-1">
                     <div className="text-[10px] text-gray-500 uppercase font-bold">卖出总额</div>
-                    <div className="text-sm font-bold text-blue-400">¥{(batch.sellPrice * batch.totalQuantity).toFixed(2)}</div>
+                    <div className="text-sm font-bold text-blue-400">¥{(batch.sellPrice * batch.totalQuantity).toFixed(4)}</div>
                   </div>
                 </div>
 
@@ -958,13 +1175,13 @@ const BatchItem = ({ batch, onDelete, askConfirmation }: { batch: any, onDelete:
                           <Scale size={14} />
                         </div>
                         <div>
-                          <div className="font-bold text-gray-300">{t.quantity.toFixed(3)}g @ ¥{t.buy_price.toFixed(2)}</div>
+                          <div className="font-bold text-gray-300">{t.quantity.toFixed(4)}g @ ¥{t.buy_price.toFixed(4)}</div>
                           <div className="text-[10px] text-gray-600">{format(new Date(t.buy_date), 'yyyy-MM-dd')}</div>
                         </div>
                       </div>
                       <div className="text-right">
                         <div className="text-[10px] text-gray-600 uppercase">买入总价</div>
-                        <div className="font-mono text-gray-400">¥{(t.buy_price * t.quantity).toFixed(2)}</div>
+                        <div className="font-mono text-gray-400">¥{(t.buy_price * t.quantity).toFixed(4)}</div>
                       </div>
                     </div>
                   ))}
@@ -1090,12 +1307,12 @@ const TradeItem = ({ trade, isSelected, onSelect, onDelete, onEdit, onDeleteSell
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <span className={cn("font-bold text-lg text-white", isFullySold && "text-gray-500")}>买入 {trade.quantity.toFixed(3)}g</span>
+                <span className={cn("font-bold text-lg text-white", isFullySold && "text-gray-500")}>买入 {trade.quantity.toFixed(4)}g</span>
                 <span className={cn(
                   "text-[10px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider",
                   isFullySold ? "bg-[#262626] text-gray-500" : "bg-yellow-500/20 text-yellow-500"
                 )}>
-                  {isFullySold ? '已售罄' : `剩余 ${remainingWeight.toFixed(3)}g`}
+                  {isFullySold ? '已售罄' : `剩余 ${remainingWeight.toFixed(4)}g`}
                 </span>
               </div>
               <div className="flex flex-wrap items-center gap-3 text-xs text-gray-500 mt-0.5">
@@ -1104,12 +1321,12 @@ const TradeItem = ({ trade, isSelected, onSelect, onDelete, onEdit, onDeleteSell
                   <span className={cn(
                     "font-bold px-2 py-0.5 rounded",
                     isFullySold ? "bg-[#262626] text-gray-500" : "text-yellow-500 bg-yellow-500/10"
-                  )}>单价: ¥{trade.buy_price.toFixed(2)}</span>
+                  )}>单价: ¥{trade.buy_price.toFixed(4)}</span>
                   <span className="text-gray-700">|</span>
                   <span className={cn(
                     "font-bold px-2 py-0.5 rounded",
                     isFullySold ? "bg-[#262626] text-gray-500" : "text-blue-400 bg-blue-400/10"
-                  )}>总价: ¥{(trade.buy_price * trade.quantity).toFixed(2)}</span>
+                  )}>总价: ¥{(trade.buy_price * trade.quantity).toFixed(4)}</span>
                 </div>
               </div>
             </div>
@@ -1122,7 +1339,7 @@ const TradeItem = ({ trade, isSelected, onSelect, onDelete, onEdit, onDeleteSell
                 "font-bold text-lg",
                 isFullySold ? "text-gray-500" : (totalProfit >= 0 ? "text-rose-500" : "text-emerald-500")
               )}>
-                {totalProfit >= 0 ? '+' : ''}{totalProfit.toFixed(2)}
+                {totalProfit >= 0 ? '+' : ''}{totalProfit.toFixed(4)}
               </span>
             </div>
             
@@ -1199,26 +1416,26 @@ const TradeItem = ({ trade, isSelected, onSelect, onDelete, onEdit, onDeleteSell
                             </div>
                             <div>
                               <div className="font-bold flex items-center gap-2 text-white">
-                                {totalBatchQuantity.toFixed(3)}g 
+                                {totalBatchQuantity.toFixed(4)}g 
                                 <span className="text-rose-400 bg-rose-400/10 px-2 py-0.5 rounded text-[10px]">合并卖出</span>
-                                <span className="text-blue-400 bg-blue-400/10 px-2 py-0.5 rounded text-[10px] font-bold">总价: ¥{(avgPrice * totalBatchQuantity).toFixed(2)}</span>
+                                <span className="text-blue-400 bg-blue-400/10 px-2 py-0.5 rounded text-[10px] font-bold">总价: ¥{(avgPrice * totalBatchQuantity).toFixed(4)}</span>
                               </div>
                               <div className="text-[10px] text-gray-500 flex items-center gap-2">
                                 {format(new Date(sells[0].sell_date), 'yyyy-MM-dd HH:mm')}
                                 <span className="text-gray-700">|</span>
-                                单价: ¥{avgPrice.toFixed(2)}
+                                单价: ¥{avgPrice.toFixed(4)}
                               </div>
                             </div>
                           </div>
                           <div className="flex items-center gap-6">
                             <div className="flex flex-col items-end">
                               <span className="text-[10px] text-gray-500 uppercase">总手续费</span>
-                              <span className="font-mono text-xs text-gray-300">¥{totalBatchFee.toFixed(2)}</span>
+                              <span className="font-mono text-xs text-gray-300">¥{totalBatchFee.toFixed(4)}</span>
                             </div>
                             <div className="flex flex-col items-end min-w-[80px]">
                               <span className="text-[10px] text-gray-500 uppercase">净收益</span>
                               <span className={cn("font-bold", totalBatchProfit >= 0 ? "text-rose-500" : "text-emerald-500")}>
-                                {totalBatchProfit >= 0 ? '+' : ''}{totalBatchProfit.toFixed(2)}
+                                {totalBatchProfit >= 0 ? '+' : ''}{totalBatchProfit.toFixed(4)}
                               </span>
                             </div>
                             <div className="flex items-center gap-1 relative z-20">
@@ -1257,9 +1474,9 @@ const TradeItem = ({ trade, isSelected, onSelect, onDelete, onEdit, onDeleteSell
                           </div>
                           <div>
                             <div className="font-bold flex items-center gap-2 text-white">
-                              {sell.quantity.toFixed(3)}g 
-                              <span className="text-rose-400 bg-rose-400/10 px-2 py-0.5 rounded text-[10px]">单价: ¥{sell.sell_price.toFixed(2)}</span>
-                              <span className="text-blue-400 bg-blue-400/10 px-2 py-0.5 rounded text-[10px] font-bold">总价: ¥{(sell.sell_price * sell.quantity).toFixed(2)}</span>
+                              {sell.quantity.toFixed(4)}g 
+                              <span className="text-rose-400 bg-rose-400/10 px-2 py-0.5 rounded text-[10px]">单价: ¥{sell.sell_price.toFixed(4)}</span>
+                              <span className="text-blue-400 bg-blue-400/10 px-2 py-0.5 rounded text-[10px] font-bold">总价: ¥{(sell.sell_price * sell.quantity).toFixed(4)}</span>
                             </div>
                             <div className="text-[10px] text-gray-500">{format(new Date(sell.sell_date), 'yyyy-MM-dd HH:mm')}</div>
                           </div>
@@ -1267,12 +1484,12 @@ const TradeItem = ({ trade, isSelected, onSelect, onDelete, onEdit, onDeleteSell
                         <div className="flex items-center gap-6">
                           <div className="flex flex-col items-end">
                             <span className="text-[10px] text-gray-500 uppercase">手续费</span>
-                            <span className="font-mono text-xs text-gray-300">¥{sell.fee.toFixed(2)}</span>
+                            <span className="font-mono text-xs text-gray-300">¥{sell.fee.toFixed(4)}</span>
                           </div>
                           <div className="flex flex-col items-end min-w-[80px]">
                             <span className="text-[10px] text-gray-500 uppercase">净收益</span>
                             <span className={cn("font-bold", sellProfit >= 0 ? "text-rose-500" : "text-emerald-500")}>
-                              {sellProfit >= 0 ? '+' : ''}{sellProfit.toFixed(2)}
+                              {sellProfit >= 0 ? '+' : ''}{sellProfit.toFixed(4)}
                             </span>
                           </div>
                           <div className="flex items-center gap-1 relative z-20">
