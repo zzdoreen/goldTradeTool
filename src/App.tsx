@@ -1072,21 +1072,6 @@ const BatchItem = ({ batch, onDelete, askConfirmation }: { batch: any, onDelete:
       exit={{ opacity: 0, scale: 0.95 }}
       className="group bg-[#141414] rounded-2xl border border-[#262626] shadow-sm hover:border-rose-500/30 transition-all overflow-hidden relative"
     >
-      <button 
-        type="button"
-        onClick={(e) => { 
-          e.stopPropagation(); 
-          askConfirmation(
-            '确认删除合并交易？',
-            '确定要删除这笔合并交易记录吗？此操作将删除该批次下所有的买入和卖出记录。此操作不可撤销。',
-            () => onDelete()
-          );
-        }}
-        className="absolute top-4 right-4 p-3 text-gray-600 hover:text-rose-500 hover:bg-rose-500/10 rounded-full transition-all z-50 opacity-0 group-hover:opacity-100 cursor-pointer flex items-center justify-center"
-      >
-        <Trash2 size={20} className="pointer-events-none" />
-      </button>
-
       <div className="p-5 border-b border-[#262626] bg-rose-500/5">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div className="flex items-center gap-4 text-left">
@@ -1111,7 +1096,7 @@ const BatchItem = ({ batch, onDelete, askConfirmation }: { batch: any, onDelete:
             </div>
           </div>
 
-          <div className="flex items-center gap-4 pr-10">
+          <div className="flex items-center justify-between md:justify-end gap-6">
             <div className="flex flex-col items-end">
               <span className="text-[10px] font-bold text-gray-500 uppercase">累计净收益</span>
               <span className={cn(
@@ -1120,6 +1105,24 @@ const BatchItem = ({ batch, onDelete, askConfirmation }: { batch: any, onDelete:
               )}>
                 {batch.totalProfit >= 0 ? '+' : ''}{batch.totalProfit.toFixed(4)}
               </span>
+            </div>
+
+            <div className="flex items-center gap-1 bg-[#1A1A1A] p-1 rounded-xl border border-[#262626]">
+              <button 
+                type="button"
+                onClick={(e) => { 
+                  e.stopPropagation(); 
+                  askConfirmation(
+                    '确认删除合并交易？',
+                    '确定要删除这笔合并交易记录吗？此操作将删除该批次下所有的买入和卖出记录。此操作不可撤销。',
+                    () => onDelete()
+                  );
+                }}
+                className="p-2 text-gray-500 hover:text-rose-500 hover:bg-rose-500/10 rounded-lg transition-all cursor-pointer flex items-center justify-center"
+                title="删除合并记录"
+              >
+                <Trash2 size={16} className="pointer-events-none" />
+              </button>
             </div>
           </div>
         </div>
@@ -1268,23 +1271,6 @@ const TradeItem = ({ trade, isSelected, onSelect, onDelete, onEdit, onDeleteSell
         isSelected && "ring-2 ring-yellow-500 border-yellow-500"
       )}
     >
-      {/* Absolute Delete Button for better clickability */}
-      <button 
-        type="button"
-        onClick={(e) => { 
-          e.stopPropagation(); 
-          askConfirmation(
-            '确认删除买入记录？',
-            '确定要删除这条买入记录及其所有卖出记录吗？此操作将永久删除数据，不可撤销。',
-            () => onDelete()
-          );
-        }}
-        className="absolute top-4 right-4 p-3 text-gray-600 hover:text-rose-500 hover:bg-rose-500/10 rounded-full transition-all z-50 opacity-0 group-hover:opacity-100 cursor-pointer flex items-center justify-center"
-        title="删除交易"
-      >
-        <Trash2 size={20} className="pointer-events-none" />
-      </button>
-
       <div className="p-5 border-b border-[#262626]">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div className="flex items-center gap-4">
@@ -1332,7 +1318,7 @@ const TradeItem = ({ trade, isSelected, onSelect, onDelete, onEdit, onDeleteSell
             </div>
           </div>
 
-          <div className="flex items-center gap-4 pr-10">
+          <div className="flex items-center justify-between md:justify-end gap-6">
             <div className="flex flex-col items-end">
               <span className="text-[10px] font-bold text-gray-500 uppercase">累计净收益</span>
               <span className={cn(
@@ -1360,8 +1346,24 @@ const TradeItem = ({ trade, isSelected, onSelect, onDelete, onEdit, onDeleteSell
                     onEdit(); 
                   }}
                   className="p-2 text-gray-500 hover:text-white hover:bg-[#262626] rounded-lg transition-all cursor-pointer"
+                  title="编辑交易"
                 >
                   <Pencil size={16} className="pointer-events-none" />
+                </button>
+                <button 
+                  type="button"
+                  onClick={(e) => { 
+                    e.stopPropagation(); 
+                    askConfirmation(
+                      '确认删除买入记录？',
+                      '确定要删除这条买入记录及其所有卖出记录吗？此操作将永久删除数据，不可撤销。',
+                      () => onDelete()
+                    );
+                  }}
+                  className="p-2 text-gray-500 hover:text-rose-500 hover:bg-rose-500/10 rounded-lg transition-all cursor-pointer flex items-center justify-center"
+                  title="删除交易"
+                >
+                  <Trash2 size={16} className="pointer-events-none" />
                 </button>
               </div>
             </div>
